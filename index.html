@@ -7,13 +7,18 @@
     
     <!-- นำเข้า Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- นำเข้า Google Fonts (Retro 8-bit & Thai Blocky) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;700&family=Press+Start+2P&display=swap" rel="stylesheet">
     
     <!-- นำเข้า Babel สำหรับรัน React บน HTML ตรงๆ -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <!-- ใส่สไตล์ (CSS) สไตล์ 8-Bit และแอนิเมชันที่นี่ -->
     <style>
-        body { font-family: 'Courier New', Courier, monospace; }
+        body { font-family: 'Press Start 2P', 'Chakra Petch', monospace; }
         .retro-text { text-shadow: 2px 2px 0px #000; }
         .blink { animation: blinker 1.5s linear infinite; }
         @keyframes blinker { 50% { opacity: 0; } }
@@ -126,9 +131,33 @@
         import React, { useState, useEffect, useRef } from 'https://esm.sh/react@18';
         import { createRoot } from 'https://esm.sh/react-dom@18/client';
         import { Trophy, ArrowRight, RotateCcw, Play, CheckCircle, XCircle, Download, Trash2, Search, Shield, Users, Database, ChevronLeft, ChevronRight, Send, Flame } from 'https://esm.sh/lucide-react@0.344.0';
+        
+        // อิมพอร์ต Firebase สำหรับเซฟข้อมูลถาวร (ใช้เวอร์ชัน gstatic ป้องกันปัญหา Component auth error)
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         // ----------------------------------------------------------------------
-        // 1. EXAM DATA (30 Mixed Questions)
+        // 1. FIREBASE SETUP
+        // ----------------------------------------------------------------------
+        const myFirebaseConfig = {
+            // หากระบบไม่ยอมบันทึกบน GitHub Pages กรุณานำ config จาก Firebase ของคุณมาใส่ตรงนี้
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : myFirebaseConfig;
+        
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'pos-exam-github';
+
+        // ----------------------------------------------------------------------
+        // 2. EXAM DATA (30 Mixed Questions)
         // ----------------------------------------------------------------------
         const QUESTIONS = [
             { q: "คำนาม (Noun) หมายถึงอะไร ทำหน้าที่อะไร?", opts: ["คน สัตว์ สิ่งของ สถานที่", "การกระทำหรือสภาพ", "คำเชื่อมประโยค", "คำแสดงอารมณ์"], a: "คน สัตว์ สิ่งของ สถานที่" },
@@ -164,7 +193,7 @@
         ];
 
         // ----------------------------------------------------------------------
-        // 2. 8-BIT AUDIO SYNTHESIZER
+        // 3. 8-BIT AUDIO SYNTHESIZER
         // ----------------------------------------------------------------------
         let audioCtx = null;
         const initAudio = () => {
@@ -198,7 +227,7 @@
         };
 
         // ----------------------------------------------------------------------
-        // 3. ANIMATED GHOST COMPONENT
+        // 4. ANIMATED GHOST COMPONENT
         // ----------------------------------------------------------------------
         const GhostIcon = () => (
             <div className="flex justify-center items-center h-[70px] mb-2 mt-1">
@@ -219,9 +248,10 @@
         );
 
         // ----------------------------------------------------------------------
-        // 4. MAIN APP COMPONENT
+        // 5. MAIN APP COMPONENT
         // ----------------------------------------------------------------------
         function App() {
+            const [user, setUser] = useState(null);
             const [appMode, setAppMode] = useState('student');
             const [appState, setAppState] = useState('intro'); 
             
@@ -239,12 +269,45 @@
             const [deleteId, setDeleteId] = useState(null);
             const [showConfirmSubmit, setShowConfirmSubmit] = useState(false);
             
-            // Local Data State (For Github Pages, we use in-memory state instead of Firebase)
+            // Firebase Data State
             const [leaderboard, setLeaderboard] = useState([]);
             const [adminSearch, setAdminSearch] = useState('');
             const [isSaving, setIsSaving] = useState(false);
 
             const scrollRef = useRef(null);
+
+            // Auth Hook
+            useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (err) { console.warn("Firebase Auth Warning:", err); }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, setUser);
+                return () => unsubscribe();
+            }, []);
+
+            // Database Fetch Hook
+            useEffect(() => {
+                if (!user) return;
+                try {
+                    const scoresRef = collection(db, 'artifacts', appId, 'public', 'data', 'pos_exam_scores');
+                    const unsub = onSnapshot(scoresRef, (snap) => {
+                        const data = [];
+                        snap.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+                        data.sort((a, b) => b.score - a.score || new Date(b.timestamp) - new Date(a.timestamp));
+                        setLeaderboard(data);
+                    });
+                    return () => unsub();
+                } catch(err) {
+                    console.warn("Firestore not configured:", err);
+                }
+            }, [user]);
 
             // Scroll Nav smoothly
             useEffect(() => {
@@ -311,7 +374,8 @@
                 }
             };
 
-            const processSubmit = () => {
+            // ระบบส่งคะแนนขึ้น Firebase
+            const processSubmit = async () => {
                 setShowConfirmSubmit(false);
                 initAudio(); playSFX('correct');
                 
@@ -324,21 +388,21 @@
                 setAppState('result');
                 setIsSaving(true);
                 
-                // จำลองการบันทึกข้อมูล (ลงใน Local Memory)
-                setTimeout(() => {
-                    const newRecord = {
-                        id: Date.now().toString(),
+                try {
+                    const payload = {
                         ...student,
                         score: finalScore,
                         total: QUESTIONS.length,
-                        timestamp: new Date().toISOString()
+                        timestamp: new Date().toISOString(),
+                        userId: user ? user.uid : 'anonymous'
                     };
-                    setLeaderboard(prev => {
-                        const newData = [...prev, newRecord];
-                        return newData.sort((a, b) => b.score - a.score || new Date(b.timestamp) - new Date(a.timestamp));
-                    });
-                    setIsSaving(false);
-                }, 1000);
+                    // บันทึกขึ้น Firestore
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'pos_exam_scores'), payload);
+                } catch (err) { 
+                    console.error("Error saving score: ", err); 
+                } finally { 
+                    setIsSaving(false); 
+                }
             };
 
             const restartGame = () => {
@@ -367,9 +431,12 @@
                 }
             };
 
-            const confirmDelete = () => {
+            // ลบข้อมูลจาก Firebase
+            const confirmDelete = async () => {
                 if (!deleteId) return;
-                setLeaderboard(prev => prev.filter(item => item.id !== deleteId));
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'pos_exam_scores', deleteId));
+                } catch(err) { console.error("Delete Error:", err); }
                 setDeleteId(null);
             };
 
@@ -402,7 +469,7 @@
             const pixelBtn = `transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_0_rgba(0,0,0,1)] transition-all font-bold cursor-pointer ${pixelBorder}`;
 
             return (
-                <div className="flex flex-col relative min-h-screen">
+                <div className="flex flex-col relative min-h-screen" style={{ fontFamily: "'Press Start 2P', 'Chakra Petch', monospace" }}>
                     <div className="fixed inset-0 pixel-bg pointer-events-none z-0 opacity-50"></div>
 
                     {/* Modals */}
@@ -411,9 +478,9 @@
                             <div className={`bg-white p-6 md:p-8 ${pixelBorder} text-center max-w-sm w-full animate-pop`}>
                                 <div className="flex justify-center mb-4"><Shield size={48} className="text-[#ff0055]" /></div>
                                 <h3 className="text-xl md:text-2xl font-black text-black mb-4 retro-text text-[#ff0055]">ADMIN LOGIN</h3>
-                                <p className="text-gray-600 font-bold mb-4 text-sm">กรุณาใส่รหัสผ่านเพื่อเข้าสู่ระบบแอดมิน</p>
+                                <p className="text-gray-600 font-bold mb-4 text-sm" style={{fontFamily: "'Chakra Petch'"}}>กรุณาใส่รหัสผ่านเพื่อเข้าสู่ระบบแอดมิน</p>
                                 <input type="password" maxLength="4" value={pinInput} onChange={e => { setPinInput(e.target.value); setPinError(false); }} className="w-full bg-gray-200 text-black p-3 font-black text-center text-3xl focus:outline-none mb-2 border-4 border-black" placeholder="****" autoFocus />
-                                {pinError && <p className="text-red-500 font-bold mb-4 blink">ACCESS DENIED! รหัสผิดพลาด</p>}
+                                {pinError && <p className="text-red-500 font-bold mb-4 blink" style={{fontFamily: "'Chakra Petch'"}}>ACCESS DENIED! รหัสผิดพลาด</p>}
                                 <div className="flex gap-2 mt-6">
                                 <button onClick={() => {setShowPinModal(false); setPinInput(''); setPinError(false);}} className={`flex-1 bg-gray-400 text-black py-3 ${pixelBtn} text-sm`}>CANCEL</button>
                                 <button onClick={submitPin} className={`flex-1 bg-[#ff0055] text-white py-3 ${pixelBtn} text-sm`}>ENTER</button>
@@ -427,7 +494,7 @@
                             <div className={`bg-white p-6 ${pixelBorder} text-center max-w-sm w-full animate-pop`}>
                                 <div className="flex justify-center mb-4"><Trash2 size={48} className="text-[#ff0055]" /></div>
                                 <h3 className="text-xl font-black text-[#ff0055] mb-2 retro-text">CONFIRM DELETE?</h3>
-                                <p className="text-black font-bold mb-6 text-sm">คุณต้องการลบข้อมูลนี้ใช่หรือไม่?<br/><span className="text-xs text-gray-500">(หากลบแล้วจะไม่สามารถกู้คืนได้)</span></p>
+                                <p className="text-black font-bold mb-6 text-sm" style={{fontFamily: "'Chakra Petch'"}}>คุณต้องการลบข้อมูลนี้ใช่หรือไม่?<br/><span className="text-xs text-gray-500">(หากลบแล้วจะไม่สามารถกู้คืนได้)</span></p>
                                 <div className="flex gap-2">
                                 <button onClick={() => setDeleteId(null)} className={`flex-1 bg-gray-400 text-black py-2 ${pixelBtn} text-sm`}>CANCEL</button>
                                 <button onClick={confirmDelete} className={`flex-1 bg-[#ff0055] text-white py-2 ${pixelBtn} text-sm`}>DELETE</button>
@@ -441,10 +508,10 @@
                             <div className={`bg-white p-6 ${pixelBorder} text-center max-w-sm w-full animate-pop`}>
                                 <div className="flex justify-center mb-4"><CheckCircle size={48} className="text-[#ff9900]" /></div>
                                 <h3 className="text-xl font-black text-[#ff9900] mb-2 retro-text">ARE YOU SURE?</h3>
-                                <p className="text-black font-bold mb-6 text-sm">คุณทำข้อสอบไปเพียง <span className="text-[#ff0055] text-lg">{answeredCount} / {QUESTIONS.length}</span> ข้อ<br/>แน่ใจหรือไม่ที่จะส่งคำตอบตอนนี้?</p>
+                                <p className="text-black font-bold mb-6 text-sm" style={{fontFamily: "'Chakra Petch'"}}>คุณทำข้อสอบไปเพียง <span className="text-[#ff0055] text-lg font-['Press_Start_2P']">{answeredCount} / {QUESTIONS.length}</span> ข้อ<br/>แน่ใจหรือไม่ที่จะส่งคำตอบตอนนี้?</p>
                                 <div className="flex gap-2">
-                                <button onClick={() => setShowConfirmSubmit(false)} className={`flex-1 bg-gray-400 text-black py-2 ${pixelBtn} text-xs md:text-sm`}>กลับไปทำต่อ</button>
-                                <button onClick={processSubmit} className={`flex-1 bg-[#00e676] text-black py-2 ${pixelBtn} text-xs md:text-sm`}>ยืนยันส่งคำตอบ</button>
+                                <button onClick={() => setShowConfirmSubmit(false)} className={`flex-1 bg-gray-400 text-black py-2 ${pixelBtn} text-xs md:text-sm`} style={{fontFamily: "'Chakra Petch'"}}>กลับไปทำต่อ</button>
+                                <button onClick={processSubmit} className={`flex-1 bg-[#00e676] text-black py-2 ${pixelBtn} text-xs md:text-sm`} style={{fontFamily: "'Chakra Petch'"}}>ยืนยันส่งคำตอบ</button>
                                 </div>
                             </div>
                         </div>
@@ -476,9 +543,9 @@
                                 {appState !== 'quiz' && (
                                     <div className="text-center w-full mx-auto mb-6 mt-4 relative">
                                         <div className="arcade-title-container">
-                                        <h1 className="text-3xl sm:text-4xl md:text-5xl arcade-title-text whitespace-nowrap">PART OF SPEECH<br/>EXAM</h1>
+                                        <h1 className="text-2xl sm:text-3xl md:text-4xl arcade-title-text whitespace-nowrap">PART OF SPEECH<br/><br/>EXAM</h1>
                                         </div>
-                                        <p className="text-gray-300 font-bold mt-5 retro-text tracking-widest blink text-xs md:text-sm">&gt;&gt; 30 QUESTIONS CHALLENGE &lt;&lt;</p>
+                                        <p className="text-gray-300 font-bold mt-8 retro-text tracking-widest blink text-xs md:text-sm">&gt;&gt; 30 QUESTIONS CHALLENGE &lt;&lt;</p>
                                     </div>
                                 )}
 
@@ -486,13 +553,12 @@
                                 {appState === 'intro' && (
                                     <div className={`bg-[#4ec0ca] p-4 md:p-8 ${pixelBorder} text-center space-y-3 md:space-y-4`}>
                                         <GhostIcon />
-                                        <h2 className="text-lg md:text-2xl font-bold text-black uppercase mb-1">แบบทดสอบภาษาอังกฤษ</h2>
-                                        <div className="text-black font-semibold text-xs md:text-base leading-relaxed bg-white/30 p-3 md:p-4 border-2 border-black border-dashed text-left shadow-[2px_2px_0_0_rgba(0,0,0,1)]">
+                                        <h2 className="text-lg md:text-2xl font-bold text-black uppercase mb-1" style={{fontFamily: "'Chakra Petch'"}}>แบบทดสอบภาษาอังกฤษ</h2>
+                                        <div className="text-black font-semibold text-xs md:text-base leading-relaxed bg-white/30 p-3 md:p-4 border-2 border-black border-dashed text-left shadow-[2px_2px_0_0_rgba(0,0,0,1)]" style={{fontFamily: "'Chakra Petch'"}}>
                                             <ul className="list-disc list-inside space-y-1">
                                                 <li>มีทั้งหมด 30 ข้อ 30 คะแนน</li>
                                                 <li>สามารถ <span className="text-[#ff0055] font-black">เลื่อนทำข้ออื่นหรือกลับมาแก้ไข</span> ได้ตลอดเวลา</li>
                                                 <li>เมื่อทำเสร็จให้กดยืนยันส่งคำตอบ</li>
-                                                <li><span className="text-[#00e676] bg-black px-1">Note:</span> ระบบนี้ใช้บันทึกชั่วคราว หากรีเฟรชหน้าเว็บข้อมูลจะหายไป</li>
                                             </ul>
                                         </div>
                                         <div className="pt-2 md:pt-4">
@@ -507,28 +573,28 @@
                                 {/* FORM */}
                                 {appState === 'form' && (
                                     <div className={`bg-[#9966ff] p-5 md:p-8 ${pixelBorder}`}>
-                                        <h2 className="text-lg md:text-2xl font-bold text-white mb-4 md:mb-6 retro-text text-center border-b-4 border-black pb-3">PLAYER REGISTRATION</h2>
-                                        {formError && (<div className="bg-[#ff0055] text-white p-2 md:p-3 mb-3 font-bold text-center border-2 border-black">{formError}</div>)}
+                                        <h2 className="text-lg md:text-xl font-bold text-white mb-4 md:mb-6 retro-text text-center border-b-4 border-black pb-3">PLAYER REGISTRATION</h2>
+                                        {formError && (<div className="bg-[#ff0055] text-white p-2 md:p-3 mb-3 font-bold text-center border-2 border-black" style={{fontFamily: "'Chakra Petch'"}}>{formError}</div>)}
                                         <form onSubmit={handleStartQuiz} className="space-y-3 md:space-y-4">
                                             <div>
-                                                <label className="block font-bold text-white retro-text mb-1 text-xs md:text-sm">ชื่อ-นามสกุล</label>
-                                                <input type="text" placeholder="ด.ช. รักเรียน ขยันยิ่ง" className={`w-full bg-white text-black p-2 md:p-3 font-bold text-sm md:text-lg focus:outline-none ${pixelBorder}`} value={student.name} onChange={e => {setStudent({...student, name: e.target.value}); setFormError('');}} />
+                                                <label className="block font-bold text-white retro-text mb-1 text-xs md:text-sm" style={{fontFamily: "'Chakra Petch'"}}>ชื่อ-นามสกุล</label>
+                                                <input type="text" placeholder="ด.ช. รักเรียน ขยันยิ่ง" className={`w-full bg-white text-black p-2 md:p-3 font-bold text-sm md:text-lg focus:outline-none ${pixelBorder}`} style={{fontFamily: "'Chakra Petch'"}} value={student.name} onChange={e => {setStudent({...student, name: e.target.value}); setFormError('');}} />
                                             </div>
                                             <div className="grid grid-cols-2 gap-3 md:gap-4">
                                                 <div>
-                                                    <label className="block font-bold text-white retro-text mb-1 text-xs md:text-sm">เลขที่</label>
-                                                    <input type="number" min="1" placeholder="ex. 15" className={`w-full bg-white text-black p-2 md:p-3 font-bold text-sm md:text-lg focus:outline-none ${pixelBorder}`} value={student.studentNo} onChange={e => {setStudent({...student, studentNo: e.target.value}); setFormError('');}} />
+                                                    <label className="block font-bold text-white retro-text mb-1 text-xs md:text-sm" style={{fontFamily: "'Chakra Petch'"}}>เลขที่</label>
+                                                    <input type="number" min="1" placeholder="ex. 15" className={`w-full bg-white text-black p-2 md:p-3 font-bold text-sm md:text-lg focus:outline-none ${pixelBorder}`} style={{fontFamily: "'Press Start 2P'"}} value={student.studentNo} onChange={e => {setStudent({...student, studentNo: e.target.value}); setFormError('');}} />
                                                 </div>
                                                 <div>
-                                                    <label className="block font-bold text-white retro-text mb-1 text-xs md:text-sm">ห้อง</label>
-                                                    <select className={`w-full bg-white text-black p-2 md:p-3 font-bold text-sm md:text-lg focus:outline-none ${pixelBorder}`} value={student.room} onChange={e => {setStudent({...student, room: e.target.value}); setFormError('');}}>
+                                                    <label className="block font-bold text-white retro-text mb-1 text-xs md:text-sm" style={{fontFamily: "'Chakra Petch'"}}>ห้อง</label>
+                                                    <select className={`w-full bg-white text-black p-2 md:p-3 font-bold text-sm md:text-lg focus:outline-none ${pixelBorder}`} style={{fontFamily: "'Press Start 2P'"}} value={student.room} onChange={e => {setStudent({...student, room: e.target.value}); setFormError('');}}>
                                                         <option value="4/7">4/7</option>
                                                         <option value="4/9">4/9</option>
                                                     </select>
                                                 </div>
                                             </div>
                                             <div className="pt-4 md:pt-6">
-                                                <button type="submit" className={`bg-[#00e676] text-black text-base md:text-xl px-6 md:px-8 py-3 ${pixelBtn} flex items-center justify-center w-full`}>BEGIN QUIZ</button>
+                                                <button type="submit" className={`bg-[#00e676] text-black text-base md:text-xl px-6 md:px-8 py-3 md:py-4 ${pixelBtn} flex items-center justify-center w-full`}>BEGIN QUIZ</button>
                                             </div>
                                         </form>
                                     </div>
@@ -538,7 +604,7 @@
                                 {appState === 'quiz' && (
                                     <div className="w-full flex flex-col gap-2 relative">
                                         <div className="bg-black p-2 md:p-3 border-b-4 border-[#ffcc00] flex justify-between items-center text-white retro-text font-bold shadow-xl rounded-t-lg text-[10px] md:text-sm">
-                                            <div className="truncate max-w-[120px] md:max-w-[200px]"><span className="text-gray-500">PLAYER:</span> <span className="text-[#ffcc00]">{student.name}</span></div>
+                                            <div className="truncate max-w-[120px] md:max-w-[200px]" style={{fontFamily: "'Chakra Petch'"}}><span className="text-gray-500 font-['Press_Start_2P']">PLAYER:</span> <span className="text-[#ffcc00]">{student.name}</span></div>
                                             <div><span className="text-gray-500">ANSWERED:</span> <span className={answeredCount === QUESTIONS.length ? 'text-[#00e676]' : 'text-white'}>{answeredCount}/{QUESTIONS.length}</span></div>
                                         </div>
                                         
@@ -554,7 +620,7 @@
 
                                         <div className={`bg-white text-black p-4 md:p-8 ${pixelBorder} relative overflow-hidden min-h-[140px] md:min-h-[180px] flex items-center justify-center`}>
                                             <div className="absolute top-2 left-2 text-gray-400 font-bold text-xs md:text-sm">Q. {currentQIndex + 1}</div>
-                                            <h2 className="text-base md:text-2xl font-bold leading-normal md:leading-relaxed text-center break-words mt-4">
+                                            <h2 className="text-base md:text-2xl font-bold leading-normal md:leading-relaxed text-center break-words mt-4" style={{fontFamily: "'Chakra Petch'"}}>
                                                 {QUESTIONS[currentQIndex].q.split('*').map((part, i) => i % 2 === 1 ? <span key={i} className="text-[#ff0055] border-b-2 md:border-b-4 border-[#ff0055] px-1 font-black">{part}</span> : part)}
                                             </h2>
                                         </div>
@@ -563,15 +629,15 @@
                                             {QUESTIONS[currentQIndex].opts.map((opt, idx) => {
                                                 const isSelected = userAnswers[currentQIndex] === opt;
                                                 return (
-                                                    <button key={idx} onClick={() => handleSelectAnswer(opt)} className={`text-sm md:text-lg py-3 md:py-4 px-3 md:px-4 ${pixelBtn} leading-tight ${isSelected ? 'bg-black text-[#ffcc00] border-[#ffcc00]' : 'bg-gray-100 text-black border-black hover:bg-gray-200'}`}>{opt}</button>
+                                                    <button key={idx} onClick={() => handleSelectAnswer(opt)} className={`text-sm md:text-base py-3 md:py-4 px-3 md:px-4 ${pixelBtn} leading-tight ${isSelected ? 'bg-black text-[#ffcc00] border-[#ffcc00]' : 'bg-gray-100 text-black border-black hover:bg-gray-200'}`} style={{fontFamily: "'Chakra Petch'"}}>{opt}</button>
                                                 )
                                             })}
                                         </div>
 
                                         <div className="flex justify-between items-center mt-3 gap-2">
-                                            <button onClick={goPrev} disabled={currentQIndex === 0} className={`flex-1 py-3 font-bold text-xs md:text-sm flex items-center justify-center ${currentQIndex === 0 ? 'bg-gray-600 text-gray-400 opacity-50 cursor-not-allowed border-4 border-black' : `bg-[#4ec0ca] text-black ${pixelBtn}`}`}><ChevronLeft className="w-4 h-4 mr-1" /> ก่อนหน้า</button>
-                                            <button onClick={attemptSubmit} className={`flex-1 py-3 font-bold text-xs md:text-sm flex items-center justify-center bg-[#ff0055] text-white ${pixelBtn} ${answeredCount === QUESTIONS.length ? 'blink' : ''}`}><Send className="w-4 h-4 mr-1" /> ส่งคำตอบ</button>
-                                            <button onClick={goNext} disabled={currentQIndex === QUESTIONS.length - 1} className={`flex-1 py-3 font-bold text-xs md:text-sm flex items-center justify-center ${currentQIndex === QUESTIONS.length - 1 ? 'bg-gray-600 text-gray-400 opacity-50 cursor-not-allowed border-4 border-black' : `bg-[#ffcc00] text-black ${pixelBtn}`}`}>ถัดไป <ChevronRight className="w-4 h-4 ml-1" /></button>
+                                            <button onClick={goPrev} disabled={currentQIndex === 0} className={`flex-1 py-3 font-bold text-[10px] md:text-sm flex items-center justify-center ${currentQIndex === 0 ? 'bg-gray-600 text-gray-400 opacity-50 cursor-not-allowed border-4 border-black' : `bg-[#4ec0ca] text-black ${pixelBtn}`}`} style={{fontFamily: "'Chakra Petch'"}}><ChevronLeft className="w-4 h-4 mr-1" /> ก่อนหน้า</button>
+                                            <button onClick={attemptSubmit} className={`flex-1 py-3 font-bold text-[10px] md:text-sm flex items-center justify-center bg-[#ff0055] text-white ${pixelBtn} ${answeredCount === QUESTIONS.length ? 'blink' : ''}`} style={{fontFamily: "'Chakra Petch'"}}><Send className="w-4 h-4 mr-1" /> ส่งคำตอบ</button>
+                                            <button onClick={goNext} disabled={currentQIndex === QUESTIONS.length - 1} className={`flex-1 py-3 font-bold text-[10px] md:text-sm flex items-center justify-center ${currentQIndex === QUESTIONS.length - 1 ? 'bg-gray-600 text-gray-400 opacity-50 cursor-not-allowed border-4 border-black' : `bg-[#ffcc00] text-black ${pixelBtn}`}`} style={{fontFamily: "'Chakra Petch'"}}>ถัดไป <ChevronRight className="w-4 h-4 ml-1" /></button>
                                         </div>
                                     </div>
                                 )}
@@ -586,10 +652,10 @@
                                             <div className="text-4xl md:text-6xl font-black text-[#ffcc00] retro-text">{score} <span className="text-lg md:text-2xl text-white">/ {QUESTIONS.length}</span></div>
                                         </div>
                                         <div className="bg-white/10 p-3 md:p-4 border-2 border-white/20 text-left font-bold text-xs md:text-base max-w-sm mx-auto overflow-hidden shadow-[2px_2px_0_0_rgba(0,0,0,0.5)]">
-                                            <p className="flex justify-between items-center border-b border-white/10 pb-1.5 md:pb-2"><span className="text-gray-300">PLAYER:</span> <span className="text-[#ffcc00] truncate max-w-[140px] md:max-w-[180px]">{student.name}</span></p>
+                                            <p className="flex justify-between items-center border-b border-white/10 pb-1.5 md:pb-2"><span className="text-gray-300">PLAYER:</span> <span className="text-[#ffcc00] truncate max-w-[140px] md:max-w-[180px]" style={{fontFamily: "'Chakra Petch'"}}>{student.name}</span></p>
                                             <p className="flex justify-between pt-1.5 md:pt-2 border-b border-white/10 pb-1.5 md:pb-2"><span className="text-gray-300">NO.:</span> <span className="text-white">{student.studentNo}</span></p>
                                             <p className="flex justify-between pt-1.5 md:pt-2"><span className="text-gray-300">ROOM:</span> <span className="text-white">{student.room}</span></p>
-                                            <p className="flex justify-between border-t-2 border-dashed border-gray-500 pt-2 md:pt-3 mt-2 md:mt-3"><span>STATUS:</span> {isSaving ? <span className="text-yellow-400 blink">SAVING...</span> : <span className="text-[#00e676] font-black">SAVED SUCCESSFULLY</span>}</p>
+                                            <p className="flex justify-between border-t-2 border-dashed border-gray-500 pt-2 md:pt-3 mt-2 md:mt-3"><span>STATUS:</span> {isSaving ? <span className="text-yellow-400 blink">SAVING...</span> : <span className="text-[#00e676] font-black">SAVED</span>}</p>
                                         </div>
                                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 pt-2 md:pt-4">
                                             <button onClick={() => setAppState('leaderboard')} className={`bg-[#4ec0ca] text-black text-sm md:text-lg py-2.5 md:py-3 ${pixelBtn}`}>RANKING</button>
@@ -602,7 +668,7 @@
                                 {appState === 'leaderboard' && (
                                     <div className={`bg-[#ff9900] p-4 md:p-8 ${pixelBorder} space-y-4 md:space-y-6 text-black`}>
                                         <div className="flex justify-between items-center border-b-4 border-black pb-3 md:pb-4">
-                                            <h2 className="text-lg md:text-3xl font-black retro-text text-white">RANKING</h2>
+                                            <h2 className="text-lg md:text-2xl font-black retro-text text-white">RANKING</h2>
                                             <Trophy size={24} className="md:w-8 md:h-8 text-white" />
                                         </div>
                                         <div className="bg-white border-4 border-black h-64 md:h-80 overflow-y-auto p-2">
@@ -620,7 +686,7 @@
                                                         {leaderboard.map((record, idx) => (
                                                             <tr key={record.id} className="border-b-2 border-dashed border-gray-300 hover:bg-yellow-100">
                                                                 <td className="p-1.5 md:p-2">{idx < 3 ? <span className="text-[#ff0055] retro-text">#{idx + 1}</span> : `#${idx + 1}`}</td>
-                                                                <td className="p-1.5 md:p-2 truncate max-w-[80px] sm:max-w-[120px] md:max-w-[200px]" title={record.name}>{record.name}</td>
+                                                                <td className="p-1.5 md:p-2 truncate max-w-[80px] sm:max-w-[120px] md:max-w-[200px]" style={{fontFamily: "'Chakra Petch'"}} title={record.name}>{record.name}</td>
                                                                 <td className="p-1.5 md:p-2 text-center text-gray-600">{record.room}</td>
                                                                 <td className="p-1.5 md:p-2 text-right text-[#00e676] retro-text text-xs md:text-base">{record.score}</td>
                                                             </tr>
@@ -642,7 +708,7 @@
                                     <div className="flex justify-between items-center border-b-4 border-black pb-3 md:pb-4">
                                         <div className="flex items-center">
                                             <Shield className="mr-2 md:mr-3 text-[#ff0055]" size={24} />
-                                            <h2 className="text-lg md:text-3xl font-black retro-text whitespace-nowrap">ADMIN CONTROL</h2>
+                                            <h2 className="text-lg md:text-2xl font-black retro-text whitespace-nowrap">ADMIN CONTROL</h2>
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 text-center">
@@ -666,7 +732,7 @@
                                     <div className="bg-white p-2 md:p-4 border-2 md:border-4 border-black shadow-[2px_2px_0_0_rgba(0,0,0,1)] md:shadow-[4px_4px_0_0_rgba(0,0,0,1)]">
                                         <div className="relative">
                                             <Search className="absolute left-2 md:left-3 top-2 md:top-3 text-gray-400" size={18} />
-                                            <input type="text" placeholder="ค้นหา ชื่อ, เลขที่, ห้อง..." value={adminSearch} onChange={e => setAdminSearch(e.target.value)} className="w-full bg-gray-100 border-2 border-black text-black p-1.5 md:p-2 pl-8 md:pl-10 focus:outline-none focus:bg-white font-bold text-xs md:text-base" />
+                                            <input style={{fontFamily: "'Chakra Petch'"}} type="text" placeholder="ค้นหา ชื่อ, เลขที่, ห้อง..." value={adminSearch} onChange={e => setAdminSearch(e.target.value)} className="w-full bg-gray-100 border-2 border-black text-black p-1.5 md:p-2 pl-8 md:pl-10 focus:outline-none focus:bg-white font-bold text-sm md:text-base" />
                                         </div>
                                     </div>
                                     <div className="bg-white border-2 md:border-4 border-black shadow-[2px_2px_0_0_rgba(0,0,0,1)] md:shadow-[4px_4px_0_0_rgba(0,0,0,1)] overflow-hidden">
@@ -686,7 +752,7 @@
                                                     {filteredAdminList.map((record) => (
                                                         <tr key={record.id} className="hover:bg-yellow-50 transition-colors">
                                                             <td className="p-2 md:p-3 text-gray-500">{new Date(record.timestamp).toLocaleString('th-TH', {dateStyle: 'short', timeStyle: 'short'})}</td>
-                                                            <td className="p-2 md:p-3 max-w-[100px] md:max-w-[200px] truncate" title={record.name}>{record.name}</td>
+                                                            <td className="p-2 md:p-3 max-w-[100px] md:max-w-[200px] truncate" style={{fontFamily: "'Chakra Petch'"}} title={record.name}>{record.name}</td>
                                                             <td className="p-2 md:p-3 text-center">{record.studentNo}</td>
                                                             <td className="p-2 md:p-3 text-center">{record.room}</td>
                                                             <td className="p-2 md:p-3 text-center text-sm md:text-lg text-[#00e676] retro-text">{record.score}</td>
@@ -711,7 +777,7 @@
 
                     {/* CREDITS FOOTER */}
                     {appState !== 'quiz' && (
-                        <footer className="w-full bg-black/80 text-center py-3 md:py-4 px-2 mt-auto text-[10px] md:text-sm text-gray-400 font-bold retro-text z-20 border-t-2 border-white/10 relative">
+                        <footer className="w-full bg-black/80 text-center py-3 md:py-4 px-2 mt-auto text-[10px] md:text-sm text-gray-400 font-bold retro-text z-20 border-t-2 border-white/10 relative" style={{fontFamily: "'Chakra Petch'"}}>
                             <div className="flex flex-col sm:flex-row justify-center items-center gap-1 sm:gap-2">
                                 <span>จัดทำโดย ครูธรรมธัช ธรรมราช</span>
                                 <span className="hidden sm:inline text-gray-600">|</span>
